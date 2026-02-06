@@ -191,6 +191,9 @@ function explodeHubCoordinators(raw) {
 
   console.log(`Loading Hubs table: ${HUBS_TABLE}`);
   const hubs = await airtableList(HUBS_TABLE);
+console.log("Hubs fields available (first record):", Object.keys(hubs?.[0]?.fields || {}));
+console.log("Using HUBS_COORDINATORS_FIELD =", HUBS_COORDINATORS_FIELD);
+console.log("Using HUBS_GROUP_ID_FIELD =", HUBS_GROUP_ID_FIELD);
 
   for (const h of hubs) {
     const groupId = h.fields?.[HUBS_GROUP_ID_FIELD];
