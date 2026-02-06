@@ -106,10 +106,21 @@ console.log(`Loading Coordinators table: ${COORDINATORS_TABLE}`);
 
   // Map: coordinator recordId -> Slack user id (U... or W...)
   const slackIdByCoordinatorRecordId = {};
-  for (const c of coordinators) {
-    const slackId = normalizeSlackId(c.fields?.[COORDINATORS_SLACK_ID_FIELD]);
-    if (slackId) slackIdByCoordinatorRecordId[c.id] = slackId;
-  }
+  const slackIdByCoordinatorRecordId = {};
+
+for (const c of coordinators) {
+  let raw = c.fields?.[COORDINATORS_SLACK_ID_FIELD];
+
+  // Normalize Airtable output (string | array | lookup)
+  if (Array.isArray(raw)) raw = raw.join(" ");
+  if (typeof raw !== "string") continue;
+
+  // Extract Slack user ID from "<@UXXXX>" OR "UXXXX"
+  const match = raw.match(/([UW][A-Z0-9]{2,})/);
+  if (!match) continue;
+
+  slackIdByCoordinatorRecordId[c.id] = match[1];
+}
 
   console.log(`Loaded ${Object.keys(slackIdByCoordinatorRecordId).length} coordinator Slack IDs.`);
 
