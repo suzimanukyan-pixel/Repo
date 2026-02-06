@@ -93,7 +93,12 @@ function normalizeSlackId(value) {
 (async function main() {
   if (!AIRTABLE_BASE_ID || !AIRTABLE_TOKEN || !SLACK_BOT_TOKEN) {
     throw new Error("Missing required env vars: AIRTABLE_BASE_ID, AIRTABLE_TOKEN, SLACK_BOT_TOKEN");
-  }
+  }console.log("Debug env presence:");
+console.log("AIRTABLE_BASE_ID length:", (AIRTABLE_BASE_ID || "").length);
+console.log("AIRTABLE_TOKEN length:", (AIRTABLE_TOKEN || "").length);
+console.log("HUBS_TABLE:", HUBS_TABLE);
+console.log("COORDINATORS_TABLE:", COORDINATORS_TABLE);
+
 
   console.log(`Base: ${AIRTABLE_BASE_ID}`);
 console.log(`Loading Coordinators table: ${COORDINATORS_TABLE}`);
