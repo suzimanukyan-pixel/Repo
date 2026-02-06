@@ -3,7 +3,10 @@
  *
  * Hubs table:
  *  - "Group ID" = Slack usergroup id (S0A...)
- *  - "Coordinators" = linked records OR lookup names from Coordinators table
+ *  - "Coordinators" = can be:
+ *      - linked record IDs (["rec...","rec..."])
+ *      - names (["Suzi","Anna"]) via lookup/rollup
+ *      - a single string like "Suzi, Anna, Emily" or "Suzi\nAnna\nEmily"
  *
  * Coordinators table:
  *  - "Slack ID" contains either "U...." or "<@U....>" (string or array)
@@ -20,7 +23,6 @@ const HUBS_GROUP_ID_FIELD = process.env.AIRTABLE_HUBS_GROUP_ID_FIELD || "Group I
 const HUBS_COORDINATORS_LINK_FIELD =
   process.env.AIRTABLE_HUBS_COORDINATORS_LINK_FIELD || "Coordinators";
 
-// Hardcode to avoid secret/whitespace mismatch
 const COORDINATORS_SLACK_ID_FIELD = "Slack ID";
 const COORDINATORS_NAME_FIELD = "Name";
 
@@ -78,20 +80,61 @@ function uniq(arr) {
   return [...new Set(arr.filter(Boolean))];
 }
 
-// Extract Slack user ID from "<@UXXXX>" or "UXXXX" or arrays/strings containing it
 function normalizeSlackId(value) {
   if (value == null) return null;
-
   const raw = Array.isArray(value) ? value.join(" ") : String(value);
   const match = raw.match(/([UW][A-Z0-9]{2,})/);
-  if (!match) return null;
-
-  return match[1];
+  return match ? match[1] : null;
 }
 
 function normalizeName(value) {
   if (value == null) return null;
   return String(value).trim().toLowerCase();
+}
+
+/**
+ * Normalize Hubs.Coordinators field into a flat list of tokens.
+ * Handles:
+ *  - ["rec..", "rec.."]
+ *  - ["Suzi", "Anna"]
+ *  - "Suzi, Anna, Emily"
+ *  - "Suzi\nAnna\nEmily"
+ *  - "Suzi; Anna | Emily"
+ */
+function explodeHubCoordinators(raw) {
+  const out = [];
+
+  const pushFromString = (s) => {
+    if (!s) return;
+    // Split on commas, semicolons, pipes, and newlines
+    const parts = String(s)
+      .split(/[,;\|\n]+/g)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    out.push(...parts);
+  };
+
+  if (raw == null) return out;
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === "string") {
+        // item might be "Suzi, Anna" (single string with multiple names)
+        pushFromString(item);
+      } else {
+        // ignore non-string types for now
+      }
+    }
+    return out;
+  }
+
+  if (typeof raw === "string") {
+    pushFromString(raw);
+    return out;
+  }
+
+  // unknown type
+  return out;
 }
 
 (async function main() {
@@ -102,9 +145,7 @@ function normalizeName(value) {
   console.log(`Loading Coordinators table: ${COORDINATORS_TABLE}`);
   const coordinators = await airtableList(COORDINATORS_TABLE);
 
-  // Map by Airtable record id (rec...)
   const slackIdByCoordinatorRecordId = {};
-  // Map by Coordinator name (lowercased)
   const slackIdByCoordinatorName = {};
 
   let invalidSlackIdCount = 0;
@@ -136,19 +177,18 @@ function normalizeName(value) {
       continue;
     }
 
-    const raw = h.fields?.[HUBS_COORDINATORS_LINK_FIELD] || [];
-    const items = Array.isArray(raw) ? raw : [raw];
+    const raw = h.fields?.[HUBS_COORDINATORS_LINK_FIELD];
+    const tokens = explodeHubCoordinators(raw);
 
+    // Map each token to a slack user id:
+    // - if token starts with "rec" -> treat it as record id
+    // - else -> treat as a name (case-insensitive)
     const slackUserIds = uniq(
-      items
-        .map((item) => {
-          if (typeof item !== "string") return null;
-
-          // Case A: linked record IDs
-          if (item.startsWith("rec")) return slackIdByCoordinatorRecordId[item];
-
-          // Case B: lookup values are names
-          return slackIdByCoordinatorName[normalizeName(item)];
+      tokens
+        .map((t) => {
+          if (!t) return null;
+          if (t.startsWith("rec")) return slackIdByCoordinatorRecordId[t];
+          return slackIdByCoordinatorName[normalizeName(t)];
         })
         .filter(Boolean)
     );
@@ -163,7 +203,6 @@ function normalizeName(value) {
       continue;
     }
 
-    // This replaces the group membership
     await slackCall("usergroups.users.update", {
       usergroup: groupId,
       users: slackUserIds.join(","),
