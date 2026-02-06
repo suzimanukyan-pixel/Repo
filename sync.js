@@ -84,16 +84,20 @@ function uniq(arr) {
   console.log("Loading Coordinators table...");
   const coordinators = await airtableList(COORDINATORS_TABLE);
 
-  const slackIdByCoordinatorRecordId = {};
   for (const c of coordinators) {
-    let slackId = c.fields?.[COORDINATORS_SLACK_ID_FIELD];
-if (typeof slackId === "string") {
-  slackId = slackId.replace(/^<@/, "").replace(/>$/, "");
-}
-    if (typeof slackId === "string" && slackId.startsWith("U")) {
-      slackIdByCoordinatorRecordId[c.id] = slackId;
-    }
+  let raw = c.fields?.[COORDINATORS_SLACK_ID_FIELD];
+
+  // Airtable can return string OR array (lookup/formula). Normalize to string.
+  if (Array.isArray(raw)) raw = raw[0];
+  if (typeof raw !== "string") continue;
+
+  // Accept either "Uxxxx" or "<@Uxxxx>"
+  const slackId = raw.replace(/^<@/, "").replace(/>$/, "").trim();
+
+  if (/^[UW][A-Z0-9]{2,}$/.test(slackId)) {
+    slackIdByCoordinatorRecordId[c.id] = slackId;
   }
+}
 
   console.log("Loading Hubs table...");
   const hubs = await airtableList(HUBS_TABLE);
