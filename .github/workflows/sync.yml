@@ -3,8 +3,6 @@ name: Sync Slack Usergroups from Airtable
 on:
   schedule:
     # GitHub schedules are in UTC.
-    # This is 14:00 UTC = 9am Toronto during EST (winter).
-    # During EDT (summer), it'll run at 10am Toronto.
     - cron: "0 14 * * *"
   workflow_dispatch: {}
 
@@ -13,9 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
       - name: Run sync
         env:
           AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
@@ -27,5 +27,4 @@ jobs:
 
           AIRTABLE_HUBS_GROUP_ID_FIELD: ${{ secrets.AIRTABLE_HUBS_GROUP_ID_FIELD }}
           AIRTABLE_HUBS_COORDINATORS_LINK_FIELD: ${{ secrets.AIRTABLE_HUBS_COORDINATORS_LINK_FIELD }}
-          AIRTABLE_COORDINATORS_SLACK_ID_FIELD: ${{ secrets.AIRTABLE_COORDINATORS_SLACK_ID_FIELD }}
-        run: node sync.js
+          AIRTABLE_COORDINATORS_SLACK_ID_FIELD
