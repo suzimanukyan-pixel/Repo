@@ -95,7 +95,8 @@ function normalizeSlackId(value) {
     throw new Error("Missing required env vars: AIRTABLE_BASE_ID, AIRTABLE_TOKEN, SLACK_BOT_TOKEN");
   }
 
-  console.log("Loading Coordinators table...");
+  console.log(`Base: ${AIRTABLE_BASE_ID}`);
+console.log(`Loading Coordinators table: ${COORDINATORS_TABLE}`);
   const coordinators = await airtableList(COORDINATORS_TABLE);
 
   // Map: coordinator recordId -> Slack user id (U... or W...)
@@ -107,7 +108,7 @@ function normalizeSlackId(value) {
 
   console.log(`Loaded ${Object.keys(slackIdByCoordinatorRecordId).length} coordinator Slack IDs.`);
 
-  console.log("Loading Hubs table...");
+  console.log(`Loading Hubs table: ${HUBS_TABLE}`);
   const hubs = await airtableList(HUBS_TABLE);
 
   for (const h of hubs) {
