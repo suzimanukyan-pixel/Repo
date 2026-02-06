@@ -118,11 +118,16 @@ function uniq(arr) {
       `Updating Slack usergroup ${groupId} with ${slackUserIds.length} users: ${slackUserIds.join(", ")}`
     );
 
-    await slackCall("usergroups.users.update", {
-      usergroup: groupId,
-      users: slackUserIds.join(","),
-    });
-  }
+  if (slackUserIds.length === 0) {
+  console.log(`Skipping ${groupId}: no valid Slack user IDs found (would error in Slack).`);
+  continue;
+}
+
+await slackCall("usergroups.users.update", {
+  usergroup: groupId,
+  users: slackUserIds.join(","),
+});
+
 
   console.log("✅ Sync complete");
 })().catch((err) => {
