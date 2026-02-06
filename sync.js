@@ -86,7 +86,10 @@ function uniq(arr) {
 
   const slackIdByCoordinatorRecordId = {};
   for (const c of coordinators) {
-    const slackId = c.fields?.[COORDINATORS_SLACK_ID_FIELD];
+    let slackId = c.fields?.[COORDINATORS_SLACK_ID_FIELD];
+if (typeof slackId === "string") {
+  slackId = slackId.replace(/^<@/, "").replace(/>$/, "");
+}
     if (typeof slackId === "string" && slackId.startsWith("U")) {
       slackIdByCoordinatorRecordId[c.id] = slackId;
     }
