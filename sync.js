@@ -6,7 +6,7 @@
  *  - "Coordinators" = linked records to Coordinators table (array of record ids)
  *
  * Coordinators table:
- *  - Slack user id field = e.g. "Slack User ID" containing "U...."
+ *  - Slack ID field contains either "U...." or "<@U....>"
  */
 
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
@@ -20,7 +20,7 @@ const HUBS_COORDINATORS_LINK_FIELD =
   process.env.AIRTABLE_HUBS_COORDINATORS_LINK_FIELD || "Coordinators";
 
 const COORDINATORS_SLACK_ID_FIELD =
-  process.env.AIRTABLE_COORDINATORS_SLACK_ID_FIELD || "Slack User ID";
+  process.env.AIRTABLE_COORDINATORS_SLACK_ID_FIELD || "Slack ID"; // <-- set your secret to "Slack ID" too
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
@@ -76,6 +76,20 @@ function uniq(arr) {
   return [...new Set(arr.filter(Boolean))];
 }
 
+function normalizeSlackId(value) {
+  // Airtable may return string OR array (lookup/formula). Normalize.
+  let raw = value;
+  if (Array.isArray(raw)) raw = raw[0];
+  if (typeof raw !== "string") return null;
+
+  // Accept either "Uxxxx" or "<@Uxxxx>"
+  const cleaned = raw.replace(/^<@/, "").replace(/>$/, "").trim();
+
+  // Slack user IDs typically start with U or W
+  if (!/^[UW][A-Z0-9]{2,}$/.test(cleaned)) return null;
+  return cleaned;
+}
+
 (async function main() {
   if (!AIRTABLE_BASE_ID || !AIRTABLE_TOKEN || !SLACK_BOT_TOKEN) {
     throw new Error("Missing required env vars: AIRTABLE_BASE_ID, AIRTABLE_TOKEN, SLACK_BOT_TOKEN");
@@ -84,20 +98,14 @@ function uniq(arr) {
   console.log("Loading Coordinators table...");
   const coordinators = await airtableList(COORDINATORS_TABLE);
 
+  // Map: coordinator recordId -> Slack user id (U... or W...)
+  const slackIdByCoordinatorRecordId = {};
   for (const c of coordinators) {
-  let raw = c.fields?.[COORDINATORS_SLACK_ID_FIELD];
-
-  // Airtable can return string OR array (lookup/formula). Normalize to string.
-  if (Array.isArray(raw)) raw = raw[0];
-  if (typeof raw !== "string") continue;
-
-  // Accept either "Uxxxx" or "<@Uxxxx>"
-  const slackId = raw.replace(/^<@/, "").replace(/>$/, "").trim();
-
-  if (/^[UW][A-Z0-9]{2,}$/.test(slackId)) {
-    slackIdByCoordinatorRecordId[c.id] = slackId;
+    const slackId = normalizeSlackId(c.fields?.[COORDINATORS_SLACK_ID_FIELD]);
+    if (slackId) slackIdByCoordinatorRecordId[c.id] = slackId;
   }
-}
+
+  console.log(`Loaded ${Object.keys(slackIdByCoordinatorRecordId).length} coordinator Slack IDs.`);
 
   console.log("Loading Hubs table...");
   const hubs = await airtableList(HUBS_TABLE);
@@ -118,16 +126,23 @@ function uniq(arr) {
       `Updating Slack usergroup ${groupId} with ${slackUserIds.length} users: ${slackUserIds.join(", ")}`
     );
 
-  if (slackUserIds.length === 0) {
-  console.log(`Skipping ${groupId}: no valid Slack user IDs found (would error in Slack).`);
-  continue;
-}
+    // IMPORTANT: Slack errors if users list is empty. Skip instead of failing the whole run.
+    if (slackUserIds.length === 0) {
+      console.log(`Skipping ${groupId}: no valid Slack user IDs found (would error in Slack).`);
+      continue;
+    }
 
-await slackCall("usergroups.users.update", {
-  usergroup: groupId,
-  users: slackUserIds.join(","),
-});
-
+    try {
+      await slackCall("usergroups.users.update", {
+        usergroup: groupId,
+        users: slackUserIds.join(","),
+      });
+    } catch (err) {
+      // Don't fail the entire job because one group had an issue
+      console.error(`Failed updating usergroup ${groupId}:`, err);
+      continue;
+    }
+  }
 
   console.log("✅ Sync complete");
 })().catch((err) => {
