@@ -3,10 +3,11 @@
  *
  * Hubs table:
  *  - "Group ID" = Slack usergroup id (S0A...)
- *  - "Coordinators" = linked records to Coordinators table (array of record ids)
+ *  - "Coordinators" = linked records OR lookup names from Coordinators table
  *
  * Coordinators table:
- *  - Slack ID field contains either "U...." or "<@U....>" (can be string or array via lookup/formula)
+ *  - "Slack ID" contains either "U...." or "<@U....>" (string or array)
+ *  - "Name" is coordinator name
  */
 
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
@@ -19,8 +20,9 @@ const HUBS_GROUP_ID_FIELD = process.env.AIRTABLE_HUBS_GROUP_ID_FIELD || "Group I
 const HUBS_COORDINATORS_LINK_FIELD =
   process.env.AIRTABLE_HUBS_COORDINATORS_LINK_FIELD || "Coordinators";
 
-const COORDINATORS_SLACK_ID_FIELD =
-  process.env.AIRTABLE_COORDINATORS_SLACK_ID_FIELD || "Slack ID";
+// Hardcode to avoid secret/whitespace mismatch
+const COORDINATORS_SLACK_ID_FIELD = "Slack ID";
+const COORDINATORS_NAME_FIELD = "Name";
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
@@ -76,24 +78,20 @@ function uniq(arr) {
   return [...new Set(arr.filter(Boolean))];
 }
 
-/**
- * Extract a Slack user id (U... or W...) from:
- *  - "U07A50Y0LC8"
- *  - "<@U07A50Y0LC8>"
- *  - ["<@U07A50Y0LC8>"] (lookup/formula arrays)
- *  - any string containing a Slack id
- */
+// Extract Slack user ID from "<@UXXXX>" or "UXXXX" or arrays/strings containing it
 function normalizeSlackId(value) {
   if (value == null) return null;
 
-  // Convert arrays to a single searchable string
   const raw = Array.isArray(value) ? value.join(" ") : String(value);
-
-  // Find a Slack user id anywhere in the string
   const match = raw.match(/([UW][A-Z0-9]{2,})/);
   if (!match) return null;
 
   return match[1];
+}
+
+function normalizeName(value) {
+  if (value == null) return null;
+  return String(value).trim().toLowerCase();
 }
 
 (async function main() {
@@ -103,42 +101,25 @@ function normalizeSlackId(value) {
 
   console.log(`Loading Coordinators table: ${COORDINATORS_TABLE}`);
   const coordinators = await airtableList(COORDINATORS_TABLE);
-console.log(
-  "Coordinator fields available (first record):",
-  Object.keys(coordinators?.[0]?.fields || {})
-);
-console.log("Using COORDINATORS_SLACK_ID_FIELD =", COORDINATORS_SLACK_ID_FIELD);
-console.log(
-  "Sample value for that field =",
-  coordinators?.[0]?.fields?.[COORDINATORS_SLACK_ID_FIELD]
-);
 
-// Map: coordinator recordId -> Slack user id
-const slackIdByCoordinatorRecordId = {};
-// Map: coordinator NAME (lowercased) -> Slack user id
-const slackIdByCoordinatorName = {};
+  // Map by Airtable record id (rec...)
+  const slackIdByCoordinatorRecordId = {};
+  // Map by Coordinator name (lowercased)
+  const slackIdByCoordinatorName = {};
 
-let invalidSlackIdCount = 0;
+  let invalidSlackIdCount = 0;
 
-for (const c of coordinators) {
-  const rawValue = c.fields?.[COORDINATORS_SLACK_ID_FIELD];
-  const slackId = normalizeSlackId(rawValue);
-
-  if (!slackId) {
-    invalidSlackIdCount += 1;
-    continue;
-  }
-
-  slackIdByCoordinatorRecordId[c.id] = slackId;
-
-  const name = (c.fields?.Name || "").toString().trim().toLowerCase();
-  if (name) slackIdByCoordinatorName[name] = slackId;
-}
-
-      // Helpful for debugging (does not print secrets)
-      // Comment this out later if too noisy:
-      // console.log(`Coordinator ${c.id} missing/invalid Slack ID in field "${COORDINATORS_SLACK_ID_FIELD}"`);
+  for (const c of coordinators) {
+    const slackId = normalizeSlackId(c.fields?.[COORDINATORS_SLACK_ID_FIELD]);
+    if (!slackId) {
+      invalidSlackIdCount += 1;
+      continue;
     }
+
+    slackIdByCoordinatorRecordId[c.id] = slackId;
+
+    const name = normalizeName(c.fields?.[COORDINATORS_NAME_FIELD]);
+    if (name) slackIdByCoordinatorName[name] = slackId;
   }
 
   console.log(
@@ -155,47 +136,38 @@ for (const c of coordinators) {
       continue;
     }
 
-    const hubCoordinatorsRaw = h.fields?.[HUBS_COORDINATORS_LINK_FIELD] || [];
+    const raw = h.fields?.[HUBS_COORDINATORS_LINK_FIELD] || [];
+    const items = Array.isArray(raw) ? raw : [raw];
 
-const slackUserIds = uniq(
-  (Array.isArray(hubCoordinatorsRaw) ? hubCoordinatorsRaw : [hubCoordinatorsRaw])
-    .map((item) => {
-      // Case A: linked record IDs: "recXXXX"
-      if (typeof item === "string" && item.startsWith("rec")) {
-        return slackIdByCoordinatorRecordId[item];
-      }
+    const slackUserIds = uniq(
+      items
+        .map((item) => {
+          if (typeof item !== "string") return null;
 
-      // Case B: lookup values: "Suzi", "Anna", etc.
-      if (typeof item === "string") {
-        return slackIdByCoordinatorName[item.trim().toLowerCase()];
-      }
+          // Case A: linked record IDs
+          if (item.startsWith("rec")) return slackIdByCoordinatorRecordId[item];
 
-      // Fallback: unknown type
-      return null;
-    })
-    .filter(Boolean)
-);
-
+          // Case B: lookup values are names
+          return slackIdByCoordinatorName[normalizeName(item)];
+        })
+        .filter(Boolean)
+    );
 
     console.log(
       `Updating Slack usergroup ${groupId} with ${slackUserIds.length} users: ${slackUserIds.join(", ")}`
     );
 
-    // Slack errors if users list is empty. Skip instead of failing the whole run.
+    // Slack errors if list is empty — keep existing members
     if (slackUserIds.length === 0) {
       console.log(`Skipping ${groupId}: no valid Slack user IDs found (would error in Slack).`);
       continue;
     }
 
-    try {
-      await slackCall("usergroups.users.update", {
-        usergroup: groupId,
-        users: slackUserIds.join(","),
-      });
-    } catch (err) {
-      console.error(`Failed updating usergroup ${groupId}:`, err);
-      continue;
-    }
+    // This replaces the group membership
+    await slackCall("usergroups.users.update", {
+      usergroup: groupId,
+      users: slackUserIds.join(","),
+    });
   }
 
   console.log("✅ Sync complete");
