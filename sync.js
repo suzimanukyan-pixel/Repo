@@ -3,14 +3,15 @@
  *
  * Hubs table:
  *  - "Group ID" = Slack usergroup id (S0A...)
- *  - "Coordinators" = can be:
+ *  - "Coordinators" can be:
  *      - linked record IDs (["rec...","rec..."])
- *      - names (["Suzi","Anna"]) via lookup/rollup
- *      - a single string like "Suzi, Anna, Emily" or "Suzi\nAnna\nEmily"
+ *      - lookup/rollup names (["Suzi","Anna"])
+ *      - single string "Suzi, Anna" or "Suzi\nAnna"
+ *      - objects (rare) depending on field type
  *
  * Coordinators table:
  *  - "Slack ID" contains either "U...." or "<@U....>" (string or array)
- *  - "Name" is coordinator name
+ *  - "Name" is the coordinator name
  */
 
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
@@ -20,9 +21,10 @@ const HUBS_TABLE = process.env.AIRTABLE_HUBS_TABLE || "Hubs";
 const COORDINATORS_TABLE = process.env.AIRTABLE_COORDINATORS_TABLE || "Coordinators";
 
 const HUBS_GROUP_ID_FIELD = process.env.AIRTABLE_HUBS_GROUP_ID_FIELD || "Group ID";
-const HUBS_COORDINATORS_LINK_FIELD =
+const HUBS_COORDINATORS_FIELD =
   process.env.AIRTABLE_HUBS_COORDINATORS_LINK_FIELD || "Coordinators";
 
+// Hardcode these to avoid whitespace/secret mismatch
 const COORDINATORS_SLACK_ID_FIELD = "Slack ID";
 const COORDINATORS_NAME_FIELD = "Name";
 
@@ -93,48 +95,68 @@ function normalizeName(value) {
 }
 
 /**
- * Normalize Hubs.Coordinators field into a flat list of tokens.
- * Handles:
- *  - ["rec..", "rec.."]
- *  - ["Suzi", "Anna"]
- *  - "Suzi, Anna, Emily"
- *  - "Suzi\nAnna\nEmily"
- *  - "Suzi; Anna | Emily"
+ * Turn the Hubs "Coordinators" field into a flat list of tokens.
+ * A token can be:
+ *   - "recXXXX" (Airtable record id)
+ *   - "Suzi" (name)
  */
 function explodeHubCoordinators(raw) {
-  const out = [];
+  const tokens = [];
 
-  const pushFromString = (s) => {
+  const pushString = (s) => {
     if (!s) return;
-    // Split on commas, semicolons, pipes, and newlines
+    // split on commas, semicolons, pipes, and newlines
     const parts = String(s)
       .split(/[,;\|\n]+/g)
       .map((p) => p.trim())
       .filter(Boolean);
-    out.push(...parts);
+    tokens.push(...parts);
   };
 
-  if (raw == null) return out;
+  const handleItem = (item) => {
+    if (item == null) return;
+
+    // Most common: string ("rec..." or "Suzi" or "Suzi, Anna")
+    if (typeof item === "string") {
+      pushString(item);
+      return;
+    }
+
+    // Some Airtable field types can return objects
+    if (typeof item === "object") {
+      // if object has an id that looks like rec...
+      if (typeof item.id === "string" && item.id.startsWith("rec")) {
+        tokens.push(item.id);
+        return;
+      }
+      // if object has a name-like field
+      if (typeof item.name === "string") {
+        pushString(item.name);
+        return;
+      }
+      // try common keys if present
+      for (const key of ["Name", "name", "value", "label"]) {
+        if (typeof item[key] === "string") {
+          pushString(item[key]);
+          return;
+        }
+      }
+      return;
+    }
+
+    // fallback
+    pushString(String(item));
+  };
+
+  if (raw == null) return tokens;
 
   if (Array.isArray(raw)) {
-    for (const item of raw) {
-      if (typeof item === "string") {
-        // item might be "Suzi, Anna" (single string with multiple names)
-        pushFromString(item);
-      } else {
-        // ignore non-string types for now
-      }
-    }
-    return out;
+    for (const item of raw) handleItem(item);
+    return tokens;
   }
 
-  if (typeof raw === "string") {
-    pushFromString(raw);
-    return out;
-  }
-
-  // unknown type
-  return out;
+  handleItem(raw);
+  return tokens;
 }
 
 (async function main() {
@@ -145,9 +167,9 @@ function explodeHubCoordinators(raw) {
   console.log(`Loading Coordinators table: ${COORDINATORS_TABLE}`);
   const coordinators = await airtableList(COORDINATORS_TABLE);
 
+  // Build lookups
   const slackIdByCoordinatorRecordId = {};
   const slackIdByCoordinatorName = {};
-
   let invalidSlackIdCount = 0;
 
   for (const c of coordinators) {
@@ -177,12 +199,17 @@ function explodeHubCoordinators(raw) {
       continue;
     }
 
-    const raw = h.fields?.[HUBS_COORDINATORS_LINK_FIELD];
+    const raw = h.fields?.[HUBS_COORDINATORS_FIELD];
+
+    // DEBUG (safe): shows what Airtable is actually sending for the coordinators field
+    // Comment out once everything works.
+    console.log(
+      `Hub "${h.fields?.Name || h.id}" coordinators raw:`,
+      JSON.stringify(raw)
+    );
+
     const tokens = explodeHubCoordinators(raw);
 
-    // Map each token to a slack user id:
-    // - if token starts with "rec" -> treat it as record id
-    // - else -> treat as a name (case-insensitive)
     const slackUserIds = uniq(
       tokens
         .map((t) => {
@@ -197,16 +224,20 @@ function explodeHubCoordinators(raw) {
       `Updating Slack usergroup ${groupId} with ${slackUserIds.length} users: ${slackUserIds.join(", ")}`
     );
 
-    // Slack errors if list is empty — keep existing members
     if (slackUserIds.length === 0) {
       console.log(`Skipping ${groupId}: no valid Slack user IDs found (would error in Slack).`);
       continue;
     }
 
-    await slackCall("usergroups.users.update", {
-      usergroup: groupId,
-      users: slackUserIds.join(","),
-    });
+    try {
+      await slackCall("usergroups.users.update", {
+        usergroup: groupId,
+        users: slackUserIds.join(","),
+      });
+    } catch (err) {
+      console.error(`Failed updating usergroup ${groupId}:`, err?.message || err);
+      continue;
+    }
   }
 
   console.log("✅ Sync complete");
