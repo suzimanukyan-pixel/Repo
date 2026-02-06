@@ -103,6 +103,15 @@ function normalizeSlackId(value) {
 
   console.log(`Loading Coordinators table: ${COORDINATORS_TABLE}`);
   const coordinators = await airtableList(COORDINATORS_TABLE);
+console.log(
+  "Coordinator fields available (first record):",
+  Object.keys(coordinators?.[0]?.fields || {})
+);
+console.log("Using COORDINATORS_SLACK_ID_FIELD =", COORDINATORS_SLACK_ID_FIELD);
+console.log(
+  "Sample value for that field =",
+  coordinators?.[0]?.fields?.[COORDINATORS_SLACK_ID_FIELD]
+);
 
   // Map: coordinator recordId -> Slack user id (U... or W...)
   const slackIdByCoordinatorRecordId = {};
