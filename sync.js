@@ -113,18 +113,28 @@ console.log(
   coordinators?.[0]?.fields?.[COORDINATORS_SLACK_ID_FIELD]
 );
 
-  // Map: coordinator recordId -> Slack user id (U... or W...)
-  const slackIdByCoordinatorRecordId = {};
-  let invalidSlackIdCount = 0;
+// Map: coordinator recordId -> Slack user id
+const slackIdByCoordinatorRecordId = {};
+// Map: coordinator NAME (lowercased) -> Slack user id
+const slackIdByCoordinatorName = {};
 
-  for (const c of coordinators) {
-    const rawValue = c.fields?.[COORDINATORS_SLACK_ID_FIELD];
-    const slackId = normalizeSlackId(rawValue);
+let invalidSlackIdCount = 0;
 
-    if (slackId) {
-      slackIdByCoordinatorRecordId[c.id] = slackId;
-    } else {
-      invalidSlackIdCount += 1;
+for (const c of coordinators) {
+  const rawValue = c.fields?.[COORDINATORS_SLACK_ID_FIELD];
+  const slackId = normalizeSlackId(rawValue);
+
+  if (!slackId) {
+    invalidSlackIdCount += 1;
+    continue;
+  }
+
+  slackIdByCoordinatorRecordId[c.id] = slackId;
+
+  const name = (c.fields?.Name || "").toString().trim().toLowerCase();
+  if (name) slackIdByCoordinatorName[name] = slackId;
+}
+
       // Helpful for debugging (does not print secrets)
       // Comment this out later if too noisy:
       // console.log(`Coordinator ${c.id} missing/invalid Slack ID in field "${COORDINATORS_SLACK_ID_FIELD}"`);
@@ -145,10 +155,27 @@ console.log(
       continue;
     }
 
-    const linkedCoordinatorRecordIds = h.fields?.[HUBS_COORDINATORS_LINK_FIELD] || [];
-    const slackUserIds = uniq(
-      linkedCoordinatorRecordIds.map((rid) => slackIdByCoordinatorRecordId[rid]).filter(Boolean)
-    );
+    const hubCoordinatorsRaw = h.fields?.[HUBS_COORDINATORS_LINK_FIELD] || [];
+
+const slackUserIds = uniq(
+  (Array.isArray(hubCoordinatorsRaw) ? hubCoordinatorsRaw : [hubCoordinatorsRaw])
+    .map((item) => {
+      // Case A: linked record IDs: "recXXXX"
+      if (typeof item === "string" && item.startsWith("rec")) {
+        return slackIdByCoordinatorRecordId[item];
+      }
+
+      // Case B: lookup values: "Suzi", "Anna", etc.
+      if (typeof item === "string") {
+        return slackIdByCoordinatorName[item.trim().toLowerCase()];
+      }
+
+      // Fallback: unknown type
+      return null;
+    })
+    .filter(Boolean)
+);
+
 
     console.log(
       `Updating Slack usergroup ${groupId} with ${slackUserIds.length} users: ${slackUserIds.join(", ")}`
